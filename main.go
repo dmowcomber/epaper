@@ -48,6 +48,9 @@ func init() {
 	dcPin.Output()
 	csPin.Output()
 	busyPin.Input()
+	//
+	rpio.SpiSpeed(4_000_000)
+	rpio.SpiMode(0, 0)
 }
 
 func main() {
@@ -174,18 +177,16 @@ func reset() {
 
 func sendCommand(device *os.File, b byte) {
 	dcPin.Low()
-	_, err := device.Write([]byte{b})
-	if err != nil {
-		log.Fatalf("failed to write command to device: %#v", err)
-	}
+	csPin.Low()
+	rpio.SpiTransmit(b)
+	csPin.High()
 }
 
 func sendData(device *os.File, b byte) {
 	dcPin.High()
-	_, err := device.Write([]byte{b})
-	if err != nil {
-		log.Fatalf("failed to write data to device: %#v", err)
-	}
+	csPin.Low()
+	rpio.SpiTransmit(b)
+	csPin.High()
 }
 
 func waitUntilIdle() {
