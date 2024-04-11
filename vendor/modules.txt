@@ -1,6 +1,9 @@
 # github.com/MaxHalford/halfgone v0.0.0-20171017091812-482157b86ccb
+## explicit
 github.com/MaxHalford/halfgone
-# github.com/stianeikeland/go-rpio/v4 v4.4.0
+# github.com/stianeikeland/go-rpio/v4 v4.6.0
+## explicit; go 1.15
 github.com/stianeikeland/go-rpio/v4
-# golang.org/x/sys v0.0.0-20190209173611-3b5209105503
+# golang.org/x/sys v0.19.0
+## explicit; go 1.18
 golang.org/x/sys/unix

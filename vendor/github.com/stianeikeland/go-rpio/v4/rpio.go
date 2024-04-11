@@ -3,31 +3,31 @@ Package rpio provides GPIO access on the Raspberry PI without any need
 for external c libraries (eg. WiringPi or BCM2835).
 
 Supports simple operations such as:
-	- Pin mode/direction (input/output/clock/pwm)
-	- Pin write (high/low)
-	- Pin read (high/low)
-	- Pin edge detection (no/rise/fall/any)
-	- Pull up/down/off
+       - Pin mode/direction (input/output/clock/pwm,alt0,alt1,alt2,alt3,alt4,alt5)
+       - Pin write (high/low)
+       - Pin read (high/low)
+       - Pin edge detection (no/rise/fall/any)
+       - Pull up/down/off
 Also clock/pwm related oparations:
-	- Set Clock frequency
-	- Set Duty cycle
+       - Set Clock frequency
+       - Set Duty cycle
 And SPI oparations:
-	- SPI transmit/recieve/exchange bytes
-	- Chip select
-	- Set speed
+       - SPI transmit/recieve/exchange bytes
+       - Set speed
+       - Chip select
 
 Example of use:
 
-	rpio.Open()
-	defer rpio.Close()
+       rpio.Open()
+       defer rpio.Close()
 
-	pin := rpio.Pin(4)
-	pin.Output()
+       pin := rpio.Pin(4)
+       pin.Output()
 
-	for {
-		pin.Toggle()
-		time.Sleep(time.Second)
-	}
+       for {
+           pin.Toggle()
+           time.Sleep(time.Second)
+       }
 
 The library use the raw BCM2835 pinouts, not the ports as they are mapped
 on the output pins for the raspberry pi, and not the wiringPi convention.
@@ -63,12 +63,15 @@ See the spec for full details of the BCM2835 controller:
 https://www.raspberrypi.org/documentation/hardware/raspberrypi/bcm2835/BCM2835-ARM-Peripherals.pdf
 and https://elinux.org/BCM2835_datasheet_errata - for errors in that spec
 
+Changes to support the BCM2711, used on the Raspberry Pi 4, were cribbed from https://github.com/RPi-Distro/raspi-gpio/
+
 */
 package rpio
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"reflect"
 	"sync"
@@ -93,6 +96,14 @@ const (
 	intrOffset  = 0x00B000
 
 	memLength = 4096
+)
+
+// BCM 2711 has a different mechanism for pull-up/pull-down/enable
+const (
+	GPPUPPDN0 = 57 // Pin pull-up/down for pins 15:0
+	GPPUPPDN1 = 58 // Pin pull-up/down for pins 31:16
+	GPPUPPDN2 = 59 // Pin pull-up/down for pins 47:32
+	GPPUPPDN3 = 60 // Pin pull-up/down for pins 57:48
 )
 
 var (
@@ -121,6 +132,12 @@ const (
 	Clock
 	Pwm
 	Spi
+	Alt0
+	Alt1
+	Alt2
+	Alt3
+	Alt4
+	Alt5
 )
 
 // State of pin, High / Low
@@ -129,11 +146,18 @@ const (
 	High
 )
 
+// Which PWM algorithm to use, Balanced or Mark/Space
+const (
+	Balanced  = true
+	MarkSpace = false
+)
+
 // Pull Up / Down / Off
 const (
 	PullOff Pull = iota
 	PullDown
 	PullUp
+	PullNone
 )
 
 // Edge events
@@ -159,32 +183,32 @@ var (
 	intrMem8 []uint8
 )
 
-// Set pin as Input
+// Input: Set pin as Input
 func (pin Pin) Input() {
 	PinMode(pin, Input)
 }
 
-// Set pin as Output
+// Output: Set pin as Output
 func (pin Pin) Output() {
 	PinMode(pin, Output)
 }
 
-// Set pin as Clock
+// Clock: Set pin as Clock
 func (pin Pin) Clock() {
 	PinMode(pin, Clock)
 }
 
-// Set pin as Pwm
+// Pwm: Set pin as Pwm
 func (pin Pin) Pwm() {
 	PinMode(pin, Pwm)
 }
 
-// Set pin High
+// High: Set pin High
 func (pin Pin) High() {
 	WritePin(pin, High)
 }
 
-// Set pin Low
+// Low: Set pin Low
 func (pin Pin) Low() {
 	WritePin(pin, Low)
 }
@@ -194,22 +218,28 @@ func (pin Pin) Toggle() {
 	TogglePin(pin)
 }
 
-// Set frequency of Clock or Pwm pin (see doc of SetFreq)
+// Freq: Set frequency of Clock or Pwm pin (see doc of SetFreq)
 func (pin Pin) Freq(freq int) {
 	SetFreq(pin, freq)
 }
 
-// Set duty cycle for Pwm pin (see doc of SetDutyCycle)
+// DutyCycle: Set duty cycle for Pwm pin (see doc of SetDutyCycle)
 func (pin Pin) DutyCycle(dutyLen, cycleLen uint32) {
 	SetDutyCycle(pin, dutyLen, cycleLen)
 }
 
-// Set pin Mode
+// DutyCycleWithPwmMode: Set duty cycle for Pwm pin while also specifying which PWM
+// mode to use, Balanced or MarkSpace (see doc of SetDutyCycleWithPwmMode)
+func (pin Pin) DutyCycleWithPwmMode(dutyLen, cycleLen uint32, mode bool) {
+	SetDutyCycleWithPwmMode(pin, dutyLen, cycleLen, mode)
+}
+
+// Mode: Set pin Mode
 func (pin Pin) Mode(mode Mode) {
 	PinMode(pin, mode)
 }
 
-// Set pin state (high/low)
+// Write: Set pin state (high/low)
 func (pin Pin) Write(state State) {
 	WritePin(pin, state)
 }
@@ -219,32 +249,51 @@ func (pin Pin) Read() State {
 	return ReadPin(pin)
 }
 
-// Set a given pull up/down mode
+// Pull: Set a given pull up/down mode
 func (pin Pin) Pull(pull Pull) {
 	PullMode(pin, pull)
 }
 
-// Pull up pin
+// PullUp: Pull up pin
 func (pin Pin) PullUp() {
 	PullMode(pin, PullUp)
 }
 
-// Pull down pin
+// PullDown: Pull down pin
 func (pin Pin) PullDown() {
 	PullMode(pin, PullDown)
 }
 
-// Disable pullup/down on pin
+// PullOff: Disable pullup/down on pin
 func (pin Pin) PullOff() {
 	PullMode(pin, PullOff)
 }
 
-// Enable edge event detection on pin
+func (pin Pin) ReadPull() Pull {
+	if !isBCM2711() {
+		return PullNone // Can't read pull-up/pull-down state on other Pi boards
+	}
+
+	reg := GPPUPPDN0 + (uint8(pin) >> 4)
+	bits := gpioMem[reg] >> ((uint8(pin) & 0xf) << 1) & 0x3
+	switch bits {
+	case 0:
+		return PullOff
+	case 1:
+		return PullUp
+	case 2:
+		return PullDown
+	default:
+		return PullNone // Invalid
+	}
+}
+
+// Detect: Enable edge event detection on pin
 func (pin Pin) Detect(edge Edge) {
 	DetectEdge(pin, edge)
 }
 
-// Check edge event on pin
+// EdgeDetected checks edge event on pin
 func (pin Pin) EdgeDetected() bool {
 	return EdgeDetected(pin)
 }
@@ -265,6 +314,9 @@ func PinMode(pin Pin, mode Mode) {
 	const in = 0   // 000
 	const out = 1  // 001
 	const alt0 = 4 // 100
+	const alt1 = 5 // 101
+	const alt2 = 6 // 110
+	const alt3 = 7 // 111
 	const alt4 = 3 // 011
 	const alt5 = 2 // 010
 
@@ -304,6 +356,18 @@ func PinMode(pin Pin, mode Mode) {
 		default:
 			return
 		}
+	case Alt0:
+		f = alt0
+	case Alt1:
+		f = alt1
+	case Alt2:
+		f = alt2
+	case Alt3:
+		f = alt3
+	case Alt4:
+		f = alt4
+	case Alt5:
+		f = alt5
 	}
 
 	memlock.Lock()
@@ -334,7 +398,7 @@ func WritePin(pin Pin, state State) {
 	memlock.Unlock() // not deferring saves ~600ns
 }
 
-// Read the state of a pin
+// ReadPin reads the state of a pin
 func ReadPin(pin Pin) State {
 	// Input level register offset (13 / 14 depending on bank)
 	levelReg := uint8(pin)/32 + 13
@@ -346,7 +410,7 @@ func ReadPin(pin Pin) State {
 	return Low
 }
 
-// Toggle a pin state (high -> low -> high)
+// TogglePin: Toggle a pin state (high -> low -> high)
 func TogglePin(pin Pin) {
 	p := uint8(pin)
 
@@ -366,7 +430,7 @@ func TogglePin(pin Pin) {
 	memlock.Unlock()
 }
 
-// Enable edge event detection on pin.
+// DetectEdge: Enable edge event detection on pin.
 //
 // Combine with pin.EdgeDetected() to check whether event occured.
 //
@@ -411,7 +475,7 @@ func DetectEdge(pin Pin, edge Edge) {
 	gpioMem[edsReg] = bit // to clear outdated detection
 }
 
-// Check whether edge event occured since last call
+// EdgeDetected checks whether edge event occured since last call
 // or since detection was enabled
 //
 // There is no way (yet) to handle interruption caused by edge event, you have to use polling.
@@ -429,35 +493,57 @@ func EdgeDetected(pin Pin) bool {
 }
 
 func PullMode(pin Pin, pull Pull) {
-	// Pull up/down/off register has offset 38 / 39, pull is 37
-	pullClkReg := pin/32 + 38
-	pullReg := 37
-	shift := pin % 32
 
 	memlock.Lock()
 	defer memlock.Unlock()
 
-	switch pull {
-	case PullDown, PullUp:
-		gpioMem[pullReg] |= uint32(pull)
-	case PullOff:
+	if isBCM2711() {
+		pullreg := GPPUPPDN0 + (pin >> 4)
+		pullshift := (pin & 0xf) << 1
+
+		var p uint32
+
+		switch pull {
+		case PullOff:
+			p = 0
+		case PullUp:
+			p = 1
+		case PullDown:
+			p = 2
+		}
+
+		// This is verbatim C code from raspi-gpio.c
+		pullbits := gpioMem[pullreg]
+		pullbits &= ^(3 << pullshift)
+		pullbits |= (p << pullshift)
+		gpioMem[pullreg] = pullbits
+	} else {
+		// Pull up/down/off register has offset 38 / 39, pull is 37
+		pullClkReg := pin/32 + 38
+		pullReg := 37
+		shift := pin % 32
+
+		switch pull {
+		case PullDown, PullUp:
+			gpioMem[pullReg] |= uint32(pull)
+		case PullOff:
+			gpioMem[pullReg] &^= 3
+		}
+
+		// Wait for value to clock in, this is ugly, sorry :(
+		time.Sleep(time.Microsecond)
+
+		gpioMem[pullClkReg] = 1 << shift
+
+		// Wait for value to clock in
+		time.Sleep(time.Microsecond)
+
 		gpioMem[pullReg] &^= 3
+		gpioMem[pullClkReg] = 0
 	}
-
-	// Wait for value to clock in, this is ugly, sorry :(
-	time.Sleep(time.Microsecond)
-
-	gpioMem[pullClkReg] = 1 << shift
-
-	// Wait for value to clock in
-	time.Sleep(time.Microsecond)
-
-	gpioMem[pullReg] &^= 3
-	gpioMem[pullClkReg] = 0
-
 }
 
-// Set clock speed for given pin in Clock or Pwm mode
+// SetFreq: Set clock speed for given pin in Clock or Pwm mode
 //
 // Param freq should be in range 4688Hz - 19.2MHz to prevent unexpected behavior,
 // however output frequency of Pwm pins can be further adjusted with SetDutyCycle.
@@ -472,8 +558,11 @@ func PullMode(pin Pin, pull Pull) {
 //   pwm_clk: pins 12, 13, 18, 19, 40, 41, 45
 func SetFreq(pin Pin, freq int) {
 	// TODO: would be nice to choose best clock source depending on target frequency, oscilator is used for now
-	const sourceFreq = 19200000 // oscilator frequency
-	const divMask = 4095        // divi and divf have 12 bits each
+	sourceFreq := 19200000 // oscilator frequency
+	if isBCM2711() {
+		sourceFreq = 52000000
+	}
+	const divMask = 4095 // divi and divf have 12 bits each
 
 	divi := uint32(sourceFreq / freq)
 	divf := uint32(((sourceFreq % freq) << 12) / freq)
@@ -531,7 +620,7 @@ func SetFreq(pin Pin, freq int) {
 	// NOTE without root permission this changes will simply do nothing successfully
 }
 
-// Set cycle length (range) and duty length (data) for Pwm pin in M/S mode
+// SetDutyCycle: Set cycle length (range) and duty length (data) for Pwm pin in M/S mode
 //
 //   |<- duty ->|
 //    __________
@@ -550,12 +639,26 @@ func SetFreq(pin Pin, freq int) {
 // The channels are:
 //   channel 1 (pwm0) for pins 12, 18, 40
 //   channel 2 (pwm1) for pins 13, 19, 41, 45.
+//
+// NOTE without root permission this function will simply do nothing successfully
 func SetDutyCycle(pin Pin, dutyLen, cycleLen uint32) {
+	SetDutyCycleWithPwmMode(pin, dutyLen, cycleLen, MarkSpace)
+
+}
+
+// SetDutyCycleWithPwmMode extends SetDutyCycle to allow for the specification of the PWM
+// algorithm to be used, Balanced or Mark/Space. The constants Balanced or MarkSpace
+// as the value. See 'SetDutyCycle(pin, dutyLen, cycleLen)' above for more information
+// regarding how to use 'SetDutyCycleWithPwmMode()'.
+//
+// NOTE without root permission this function will simply do nothing successfully
+func SetDutyCycleWithPwmMode(pin Pin, dutyLen, cycleLen uint32, mode bool) {
 	const pwmCtlReg = 0
 	var (
 		pwmDatReg uint
 		pwmRngReg uint
 		shift     uint // offset inside ctlReg
+
 	)
 
 	switch pin {
@@ -569,37 +672,46 @@ func SetDutyCycle(pin Pin, dutyLen, cycleLen uint32) {
 		shift = 8
 	default:
 		return
+
 	}
 
 	const ctlMask = 255 // ctl setting has 8 bits for each channel
 	const pwen = 1 << 0 // enable pwm
-	const msen = 1 << 7 // use M/S transition instead of pwm algorithm
+	var msen uint32 = 0
+	// The MSEN1 field in the CTL register is at offset 7. This block starts with the assumption
+	// that 'msen' will be associated with channel 'pwm0'. If this is not the case, 'msen' will
+	// be further shifted in the next code block below to the MSEN2 field at offset 15.
+	if mode == MarkSpace {
+		msen = 1 << 7
+	}
 
-	// reset settings
+	// Shifting 'pwen' and 'msen' puts the associated values at the correct offset within the CTL
+	// register ('pwmCtlReg'). In addition, 'msen' is associated with a PWM channel depending on the
+	// value of 'pin' (see above). 'msen' will either stay at offset 7, as set above for channel 'pwm0',
+	// or be shifted 8 bits if the the associated 'pin' is on channel 'pwm1'.
 	pwmMem[pwmCtlReg] = pwmMem[pwmCtlReg]&^(ctlMask<<shift) | msen<<shift | pwen<<shift
+
 	// set duty cycle
 	pwmMem[pwmDatReg] = dutyLen
 	pwmMem[pwmRngReg] = cycleLen
 	time.Sleep(time.Microsecond * 10)
-
-	// NOTE without root permission this changes will simply do nothing successfully
 }
 
-// Stop pwm for both channels
+// StopPwm: Stop pwm for both channels
 func StopPwm() {
 	const pwmCtlReg = 0
 	const pwen = 1
 	pwmMem[pwmCtlReg] &^= pwen<<8 | pwen
 }
 
-// Start pwm for both channels
+// StartPwm starts pwm for both channels
 func StartPwm() {
 	const pwmCtlReg = 0
 	const pwen = 1
 	pwmMem[pwmCtlReg] |= pwen<<8 | pwen
 }
 
-// Enables given IRQs (by setting bit to 1 at intended position).
+// EnableIRQs: Enables given IRQs (by setting bit to 1 at intended position).
 // See 'ARM peripherals interrupts table' in pheripherals datasheet.
 // WARNING: you can corrupt your system, only use this if you know what you are doing.
 func EnableIRQs(irqs uint64) {
@@ -609,7 +721,7 @@ func EnableIRQs(irqs uint64) {
 	intrMem[irqEnable2] = uint32(irqs >> 32) // IRQ 32..63
 }
 
-// Disables given IRQs (by setting bit to 1 at intended position).
+// DisableIRQs: Disables given IRQs (by setting bit to 1 at intended position).
 // See 'ARM peripherals interrupts table' in pheripherals datasheet.
 // WARNING: you can corrupt your system, only use this if you know what you are doing.
 func DisableIRQs(irqs uint64) {
@@ -631,9 +743,9 @@ func Open() (err error) {
 	var file *os.File
 
 	// Open fd for rw mem access; try dev/mem first (need root)
-	file, err = os.OpenFile("/dev/mem", os.O_RDWR|os.O_SYNC, 0)
+	file, err = os.OpenFile("/dev/mem", os.O_RDWR|os.O_SYNC, os.ModePerm)
 	if os.IsPermission(err) { // try gpiomem otherwise (some extra functions like clock and pwm setting wont work)
-		file, err = os.OpenFile("/dev/gpiomem", os.O_RDWR|os.O_SYNC, 0)
+		file, err = os.OpenFile("/dev/gpiomem", os.O_RDWR|os.O_SYNC, os.ModePerm)
 	}
 	if err != nil {
 		return
@@ -714,23 +826,49 @@ func Close() error {
 
 // Read /proc/device-tree/soc/ranges and determine the base address.
 // Use the default Raspberry Pi 1 base address if this fails.
-func getBase() (base int64) {
-	base = bcm2835Base
+func readBase(offset int64) (int64, error) {
 	ranges, err := os.Open("/proc/device-tree/soc/ranges")
 	defer ranges.Close()
 	if err != nil {
-		return
+		return 0, err
 	}
 	b := make([]byte, 4)
-	n, err := ranges.ReadAt(b, 4)
+	n, err := ranges.ReadAt(b, offset)
 	if n != 4 || err != nil {
-		return
+		return 0, err
 	}
 	buf := bytes.NewReader(b)
 	var out uint32
 	err = binary.Read(buf, binary.BigEndian, &out)
 	if err != nil {
-		return
+		return 0, err
 	}
-	return int64(out)
+
+	if out == 0 {
+		return 0, errors.New("rpio: GPIO base address not found")
+	}
+	return int64(out), nil
+}
+
+func getBase() int64 {
+	// Pi 2 & 3 GPIO base address is at offset 4
+	b, err := readBase(4)
+	if err == nil {
+		return b
+	}
+
+	// Pi 4 GPIO base address is as offset 8
+	b, err = readBase(8)
+	if err == nil {
+		return b
+	}
+
+	// Default to Pi 1
+	return int64(bcm2835Base)
+}
+
+// The Pi 4 uses a BCM 2711, which has different register offsets and base addresses than the rest of the Pi family (so far).  This
+// helper function checks if we're on a 2711 and hence a Pi 4
+func isBCM2711() bool {
+	return gpioMem[GPPUPPDN3] != 0x6770696f
 }
