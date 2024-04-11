@@ -57,13 +57,13 @@ func main() {
 	}
 
 	reset()
-	sendCommand(device, POWER_SETTING)
+	sendCommand(device, powerSetting)
 	sendData(device, 0x03) // VDS_EN, VDG_EN
 	sendData(device, 0x00) // VCOM_HV, VGHL_LV[1], VGHL_LV[0]
 	sendData(device, 0x2b) // VDH
 	sendData(device, 0x2b) // VDL
 	sendData(device, 0x09) // VDHR
-	sendCommand(device, BOOSTER_SOFT_START)
+	sendCommand(device, boosterSoftStart)
 	sendData(device, 0x07)
 	sendData(device, 0x07)
 	sendData(device, 0x17)
@@ -95,30 +95,30 @@ func main() {
 	sendCommand(device, 0xF8)
 	sendData(device, 0x73)
 	sendData(device, 0x41)
-	sendCommand(device, PARTIAL_DISPLAY_REFRESH)
+	sendCommand(device, partialDisplayRefresh)
 	sendData(device, 0x00)
-	sendCommand(device, POWER_ON)
+	sendCommand(device, powerOn)
 
 	waitUntilIdle()
-	sendCommand(device, PANEL_SETTING)
+	sendCommand(device, panelSetting)
 	sendData(device, 0xAF) // KW-BF   KWR-AF    BWROTP 0f
-	sendCommand(device, PLL_CONTROL)
+	sendCommand(device, pllControl)
 	sendData(device, 0x3A) // 3A 100HZ   29 150Hz 39 200HZ    31 171HZ
-	sendCommand(device, VCM_DC_SETTING_REGISTER)
+	sendCommand(device, vcmDcSettingRegister)
 	sendData(device, 0x12)
 	time.Sleep(2 * time.Millisecond)
 	setLut(device)
-	//  # EPD hardware init end
+	// EPD hardware init end
 
 	log.Println("opening image")
-	existingImageFile, err := os.Open("image.jpg")
+	imageFile, err := os.Open("image.jpg")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer existingImageFile.Close()
+	defer imageFile.Close()
 
 	log.Println("decode")
-	img, _, err := image.Decode(existingImageFile)
+	img, _, err := image.Decode(imageFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -198,32 +198,32 @@ func waitUntilIdle() {
 }
 
 func setLut(device *os.File) {
-	sendCommand(device, LUT_FOR_VCOM) // vcom
+	sendCommand(device, lutForVcom) // vcom
 	for count := 0; count < 44; count++ {
-		sendData(device, lut_vcom_dc[count])
+		sendData(device, lutVcomDC[count])
 	}
-	sendCommand(device, LUT_WHITE_TO_WHITE) // ww --
+	sendCommand(device, lutWhiteToWhite) // ww --
 	for count := 0; count < 42; count++ {
-		sendData(device, lut_ww[count])
+		sendData(device, lutWw[count])
 	}
-	sendCommand(device, LUT_BLACK_TO_WHITE) // bw r
+	sendCommand(device, lutBlackToWhite) // bw r
 	for count := 0; count < 42; count++ {
-		sendData(device, lut_bw[count])
+		sendData(device, lutBw[count])
 	}
-	sendCommand(device, LUT_WHITE_TO_BLACK) // wb w
+	sendCommand(device, lutWhiteToBlack) // wb w
 	for count := 0; count < 42; count++ {
-		sendData(device, lut_bb[count])
+		sendData(device, lutBb[count])
 	}
-	sendCommand(device, LUT_BLACK_TO_BLACK) // bb b
+	sendCommand(device, lutBlackToBlack) // bb b
 	for count := 0; count < 42; count++ {
-		sendData(device, lut_wb[count])
+		sendData(device, lutWb[count])
 	}
 }
 
 func displayFrame(device *os.File, b []byte) {
 	size := len(b)
 
-	sendCommand(device, DATA_START_TRANSMISSION_1)
+	sendCommand(device, dataStartTransmission1)
 
 	time.Sleep(2 * time.Millisecond)
 
@@ -232,7 +232,7 @@ func displayFrame(device *os.File, b []byte) {
 	}
 	time.Sleep(2 * time.Millisecond)
 
-	sendCommand(device, DATA_START_TRANSMISSION_2)
+	sendCommand(device, dataStartTransmission2)
 	time.Sleep(2 * time.Millisecond)
 
 	for i := 0; i < size; i++ {
@@ -240,6 +240,6 @@ func displayFrame(device *os.File, b []byte) {
 	}
 	time.Sleep(2 * time.Millisecond)
 
-	sendCommand(device, DISPLAY_REFRESH)
+	sendCommand(device, displayRefresh)
 	waitUntilIdle()
 }
