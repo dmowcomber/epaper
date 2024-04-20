@@ -1,4 +1,4 @@
-package main
+package epaper
 
 const (
 	// EPD2IN7 commands

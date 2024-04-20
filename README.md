@@ -10,7 +10,7 @@ go-epaper-demo is an example of how to display an image to a Waveshare 2.7 inch 
 #### Run
 Run go-epaper-demo with Golang
 ```bash
-GO111MODULE=on go run -mod=vendor .
+go run -mod=vendor ./examples/image
 ```
 
 Run go-epaper-demo with Docker
