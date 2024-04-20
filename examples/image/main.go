@@ -10,7 +10,7 @@ import (
 	"os"
 
 	"github.com/MaxHalford/halfgone"
-	epaper "github.com/dmowcomber/go-epaper-demo"
+	epaper "github.com/dmowcomber/epaper"
 	rpio "github.com/stianeikeland/go-rpio/v4"
 	"golang.org/x/sys/unix"
 )

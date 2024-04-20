@@ -1,4 +1,4 @@
-module github.com/dmowcomber/go-epaper-demo
+module github.com/dmowcomber/epaper
 
 go 1.22.2
 
